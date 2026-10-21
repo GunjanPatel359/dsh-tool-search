@@ -41,6 +41,12 @@ export const DEFAULTS = Object.freeze({
   minTools: 10,
   /** The most tools one `tool_details` call returns. */
   maxDetails: 10,
+  /**
+   * What each index line carries: 'names' (the name), 'summary' (name and the first sentence of
+   * its description) or 'signature' (name, parameter names and summary; the model may then call a
+   * simple tool without reading its details first).
+   */
+  indexStyle: 'signature',
   /** Characters of each tool's summary in the index. */
   summaryChars: 120,
   /** Characters of the whole index; past it, the remaining tools are listed by name only. */
@@ -48,6 +54,7 @@ export const DEFAULTS = Object.freeze({
 })
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/
+const INDEX_STYLES = ['names', 'summary', 'signature']
 
 /** Merge and check a configuration. Throws on a value that cannot work. */
 export function resolveConfig(config = {}) {
@@ -71,6 +78,9 @@ export function resolveConfig(config = {}) {
     }
   }
   if (resolved.maxDetails < 1) throw new Error('dsh-tool-search: maxDetails must be at least 1')
+  if (!INDEX_STYLES.includes(resolved.indexStyle)) {
+    throw new Error(`dsh-tool-search: indexStyle must be one of ${INDEX_STYLES.join(', ')}`)
+  }
   return resolved
 }
 
@@ -88,6 +98,20 @@ export function summary(description, limit) {
   const line = String(description ?? '').trim().split('\n')[0].trim()
   const sentence = /^(.+?[.!?])(\s|$)/.exec(line)?.[1] ?? line
   return sentence.length > limit ? `${sentence.slice(0, Math.max(0, limit - 3)).trimEnd()}...` : sentence
+}
+
+/** A tool's parameter names, optional ones marked `?`: `(path, content, mode?)`. */
+export function signature(parameters) {
+  const properties = parameters?.properties ?? {}
+  const required = new Set(parameters?.required ?? [])
+  return `(${Object.keys(properties).map(key => (required.has(key) ? key : `${key}?`)).join(', ')})`
+}
+
+/** One index line, in the configured style. */
+function indexLine(tool, config) {
+  if (config.indexStyle === 'names') return `- ${tool.name}`
+  const head = config.indexStyle === 'signature' ? `${tool.name}${signature(tool.parameters)}` : tool.name
+  return `- ${head}: ${summary(tool.description, config.summaryChars)}`
 }
 
 /**
@@ -109,7 +133,7 @@ export function buildIndex(tools, config) {
     lines.push(`${server}:`)
     used += server.length + 2
     for (const tool of group) {
-      const line = `- ${tool.name}: ${summary(tool.description, config.summaryChars)}`
+      const line = indexLine(tool, config)
       if (unsummarized.length === 0 && used + line.length + 1 <= config.indexChars) {
         lines.push(line)
         used += line.length + 1
@@ -124,10 +148,19 @@ export function buildIndex(tools, config) {
 
 /** The details tool's description: how to use the two tools, then the index. */
 export function describeDetails(deferred, config) {
+  const how = config.indexStyle === 'signature'
+    ? [
+        `To use one, run it with ${config.callToolName}. When its parameters are clear from the signature below, call it directly;`,
+        `otherwise read its full description and parameters first with ${config.detailsToolName} (several names at once if you need them).`,
+      ]
+    : [
+        `To use one, call ${config.detailsToolName} with its exact name (several at once if you need them) to read its full description and parameters,`,
+        `then run it with ${config.callToolName}.`,
+      ]
   const head = [
     'More tools are available than are listed among your tools; they are indexed below.',
-    `To use one, call ${config.detailsToolName} with its exact name (several at once if you need them) to read its full description and parameters,`,
-    `then run it with ${config.callToolName}. Check this index before saying a capability is missing.`,
+    ...how,
+    'Check this index before saying a capability is missing.',
   ].join(' ')
   return `${head}\n\nAvailable tools (${deferred.length}):\n${buildIndex(deferred, config)}`
 }

@@ -40,5 +40,13 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GunjanPatel359/dsh-tool-search.git"
+  },
+  "homepage": "https://github.com/GunjanPatel359/dsh-tool-search#readme",
+  "bugs": {
+    "url": "https://github.com/GunjanPatel359/dsh-tool-search/issues"
   }
 }

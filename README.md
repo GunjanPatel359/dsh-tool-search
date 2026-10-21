@@ -14,7 +14,19 @@ model → tool_details(["mcp__github__create_issue"])   → full description + p
 model → call_tool("mcp__github__create_issue", {...}) → the tool's own result
 ```
 
-Measured on a real 20-tool MCP server: full definitions 30,810 characters, the index 2,209 (about 93% less).
+Measured on a real 20-tool MCP server: full definitions 30,810 characters, a name + summary index 2,209 (about 93% less).
+
+## Does it save tokens?
+
+Per step, always: the first request of a task was 26-62% smaller in our runs. Per task it depends on the model, because the model takes extra steps (the lookup, fewer calls per step, detours into built-in tools). Three runs each, one small task:
+
+| Model | Tokens per task |
+|---|---|
+| OpenAI gpt-5.4-mini | -40% |
+| DeepSeek deepseek-flash | -20% (25 tools), -10% (75 tools) |
+| Claude claude-haiku-5-5 | +17% with the `summary` index; about even with `signature` (now the default) |
+
+Every run finished its task with and without the plugin. Details and caveats: [know/07-results.md](know/07-results.md).
 
 ## Why it never breaks the prompt cache
 
@@ -38,7 +50,7 @@ dsh --profile tui
 Or from a checkout, for one run:
 
 ```sh
-git clone https://github.com/<you>/dsh-tool-search
+git clone https://github.com/GunjanPatel359/dsh-tool-search
 cd dsh-tool-search
 dsh tui --patch ./examples/local.patch.yml
 ```
@@ -55,6 +67,7 @@ The plugin has no runtime dependencies and imports nothing from DSH, so it also 
     exclude: []               # ...except these prefixes, e.g. ['mcp__mycore__'] for tools used every turn
     alwaysLoad: []            # exact names always sent in full
     minTools: 10              # defer only when at least this many match
+    indexStyle: signature     # names | summary | signature (name, parameter names, summary)
     maxDetails: 10            # most tools one tool_details call returns
     summaryChars: 120         # length of each summary in the index
     indexChars: 12000         # past this, remaining tools are listed by name only
@@ -91,6 +104,15 @@ Each agent sees only its own tools, sub-agents included, and its state goes when
 npm install
 npm test
 ```
+
+End to end, with a real model and real MCP servers (keys in `~/.dsh-e2e.env`; see [know/06-testing.md](know/06-testing.md)):
+
+```sh
+RUNS=3 ./e2e/run.sh                         # DeepSeek
+PROVIDER=anthropic SERVERS=large ./e2e/run.sh
+```
+
+How it all works, file by file: [know/](know/README.md).
 
 The tests mount the real DSH tool registry and prompt assembly (`@deepseek-ai/dsh-tools`, `@deepseek-ai/dsh-system-prompt`, `@deepseek-ai/dsh-scope`), register MCP-shaped tools on agent scopes the way an ACP session does, read the assembly a model request would carry, and run calls through the registry's execute pipeline.
 

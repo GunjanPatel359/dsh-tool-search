@@ -78,7 +78,7 @@ describe('dsh-tool-search', () => {
     expect(await visible(a)).toEqual(['call_tool', 'read', 'tool_details'])
     const index = (await assemble(a)).find(t => t.name === 'tool_details').description
     expect(index).toContain('Available tools (12)')
-    expect(index).toContain('github:\n- mcp__github__create_issue: create issue on github.')
+    expect(index).toContain('github:\n- mcp__github__create_issue(title, body?): create issue on github.')
     expect(index).toContain('slack:')
     expect(index).not.toContain('Longer detail')
   })
@@ -209,7 +209,20 @@ describe('dsh-tool-search', () => {
     for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
   })
 
+  it('writes the index in each style', async () => {
+    const index = async indexStyle => {
+      const { assemble, a } = await withTools({ indexStyle })
+      return (await assemble(a)).find(t => t.name === 'tool_details').description
+    }
+    expect(await index('names')).toContain('- mcp__github__create_issue\n')
+    expect(await index('summary')).toContain('- mcp__github__create_issue: create issue on github.')
+    const signed = await index('signature')
+    expect(signed).toContain('- mcp__github__create_issue(title, body?): create issue on github.')
+    expect(signed).toContain('call it directly')
+  })
+
   it('refuses a configuration that cannot work', () => {
+    expect(() => ToolSearch.resolveConfig({ indexStyle: 'full' })).toThrow(/indexStyle/)
     expect(() => ToolSearch.resolveConfig({ detailsToolName: 'bad name' })).toThrow(/detailsToolName/)
     expect(() => ToolSearch.resolveConfig({ callToolName: 'tool_details' })).toThrow(/must differ/)
     expect(() => ToolSearch.resolveConfig({ match: 'mcp__' })).toThrow(/match/)
