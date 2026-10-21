@@ -1,9 +1,9 @@
 /**
- * Ranking for tool search. Pure functions over tool schemas ({ name, description }), with no
- * dependency on the harness, so they can be tested and reused on their own.
+ * Name helpers. Pure functions over tool schemas ({ name, description }), with no dependency on
+ * the harness, so they can be tested and reused on their own.
  */
 
-/** Split a tool name or a query into lower-case words: `mcp__github__create_issue` -> mcp, github, create, issue. */
+/** Split a tool name into lower-case words: `mcp__github__create_issue` -> mcp, github, create, issue. */
 export function words(text) {
   return String(text ?? '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -21,78 +21,52 @@ export function serverOf(name) {
   return match ? match[1] : undefined
 }
 
-/**
- * Parse a query. `select:a,b` names tools exactly; anything else is keywords, where a word
- * starting with `+` is required to appear in the tool's name.
- */
-export function parseQuery(query) {
-  const text = String(query ?? '').trim()
-  if (text.toLowerCase().startsWith('select:')) {
-    const names = text.slice('select:'.length).split(',').map(s => s.trim()).filter(Boolean)
-    return { kind: 'select', names }
-  }
-  const required = []
-  const optional = []
-  for (const raw of text.split(/\s+/).filter(Boolean)) {
-    if (raw.startsWith('+') && raw.length > 1) required.push(...words(raw.slice(1)))
-    else optional.push(...words(raw))
-  }
-  return { kind: 'keywords', required, optional }
-}
-
-/**
- * Score one tool against keywords. A word in the tool's own name counts most, then the server
- * name, then the description. Zero means no match.
- */
-export function score(tool, required, optional) {
-  const server = serverOf(tool.name)
-  const serverWords = new Set(server ? words(server) : [])
-  const nameWords = new Set(words(tool.name).filter(w => w !== 'mcp' && !serverWords.has(w)))
-  const descriptionWords = new Set(words(tool.description))
-  const nameText = tool.name.toLowerCase()
-
-  for (const word of required) {
-    if (!nameWords.has(word) && !serverWords.has(word) && !nameText.includes(word)) return 0
-  }
-
-  let total = 0
-  for (const word of [...required, ...optional]) {
-    if (nameWords.has(word)) total += 4
-    else if (nameText.includes(word)) total += 2
-    if (serverWords.has(word)) total += 2
-    if (descriptionWords.has(word)) total += 1
-    else if (word.length >= 4 && [...descriptionWords].some(d => d.startsWith(word))) total += 0.5
-  }
-  return total
-}
-
-/**
- * Find the tools a query asks for.
- * @param tools - the searchable tool schemas.
- * @param query - `select:a,b`, or keywords.
- * @param limit - the most matches to return for a keyword query.
- * @returns `{ matches, missing }`: the matched schemas best first, and for `select:` the names
- *   that are not among the tools.
- */
-export function search(tools, query, limit = 5) {
-  const parsed = parseQuery(query)
-  if (parsed.kind === 'select') {
-    const byName = new Map(tools.map(t => [t.name, t]))
-    const matches = []
-    const missing = []
-    for (const name of parsed.names) {
-      const tool = byName.get(name)
-      if (tool) matches.push(tool)
-      else missing.push(name)
+/** Edit distance between two short strings, stopping early past `max`. */
+export function distance(a, b, max = 3) {
+  if (Math.abs(a.length - b.length) > max) return max + 1
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i]
+    let best = i
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      best = Math.min(best, current[j])
     }
-    return { matches, missing }
+    if (best > max) return max + 1
+    previous = current
   }
-  if (parsed.required.length === 0 && parsed.optional.length === 0) return { matches: [], missing: [] }
-  const matches = tools
-    .map(tool => ({ tool, score: score(tool, parsed.required, parsed.optional) }))
-    .filter(entry => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name))
-    .slice(0, Math.max(1, limit))
-    .map(entry => entry.tool)
-  return { matches, missing: [] }
+  return previous[b.length]
+}
+
+/** A likely typo: one edit in words of 4 letters or more, two in words of 8 or more. */
+function closeSpelling(a, b) {
+  const shorter = Math.min(a.length, b.length)
+  if (shorter < 4) return false
+  const allowed = shorter >= 8 ? 2 : 1
+  return distance(a, b, allowed) <= allowed
+}
+
+/**
+ * The real names closest to one the model asked for but that does not exist: a typo, a missing
+ * server prefix, or a tool whose server has gone. Names sharing more words rank higher; a close
+ * spelling counts as a shared word.
+ * @returns up to `limit` names, best first; empty when nothing is close.
+ */
+export function suggest(tools, wanted, limit = 5) {
+  const target = words(wanted).filter(w => w !== 'mcp')
+  if (target.length === 0) return []
+  const scored = []
+  for (const tool of tools) {
+    const candidate = words(tool.name).filter(w => w !== 'mcp')
+    let shared = 0
+    for (const word of target) {
+      if (candidate.includes(word)) shared += 1
+      else if (candidate.some(c => closeSpelling(word, c))) shared += 0.75
+    }
+    if (shared > 0) scored.push({ name: tool.name, score: shared / Math.max(target.length, candidate.length) })
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map(s => s.name)
 }

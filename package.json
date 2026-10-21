@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-search",
   "version": "0.1.0",
-  "description": "Tool search for DSH: hide MCP tool definitions until the model asks for them. Built on DeepSeek Harness.",
+  "description": "Deferred tool loading for DSH: send MCP tools as a name index and load details on demand, without breaking the prompt cache. Built on DeepSeek Harness.",
   "type": "module",
   "main": "src/index.mjs",
   "exports": {
