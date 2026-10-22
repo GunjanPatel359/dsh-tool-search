@@ -1,5 +1,8 @@
+/**
+ * The name helpers on their own: no registry, no harness, only the tool shapes they read. The rule
+ * each one follows, and the reason for it: docs/name-matching.md.
+ */
 import { describe, expect, it } from 'vitest'
-import { summary } from '../src/index.mjs'
 import { distance, serverOf, suggest, words } from '../src/search.mjs'
 
 const tools = [
@@ -7,26 +10,74 @@ const tools = [
   { name: 'mcp__github__list_issues' },
   { name: 'mcp__github__create_pull_request' },
   { name: 'mcp__slack__post_message' },
+  { name: 'mcp__slack__add_reaction' },
   { name: 'mcp__my_db__run_query' },
 ]
 
-describe('names', () => {
+describe('words', () => {
   it('splits snake, kebab and camel case', () => {
     expect(words('mcp__github__create_issue')).toEqual(['mcp', 'github', 'create', 'issue'])
     expect(words('postMessage-now')).toEqual(['post', 'message', 'now'])
   })
 
+  it('splits a capital that starts a word and keeps a digit with the word it belongs to', () => {
+    expect(words('mcp__github__createIssueV2')).toEqual(['mcp', 'github', 'create', 'issue', 'v2'])
+  })
+
+  it('splits nothing that has no letters or digits in it', () => {
+    expect(words('')).toEqual([])
+    expect(words('___')).toEqual([])
+    expect(words(undefined)).toEqual([])
+  })
+})
+
+describe('serverOf', () => {
   it('reads the server out of an MCP name, single underscores included', () => {
     expect(serverOf('mcp__github__create_issue')).toBe('github')
     expect(serverOf('mcp__my_db__run_query')).toBe('my_db')
     expect(serverOf('read')).toBeUndefined()
   })
 
+  it('resolves a name with more double underscores to the leftmost server', () => {
+    expect(serverOf('mcp__a__b__c')).toBe('a')
+  })
+
+  it('refuses a name that is not the shape it reads', () => {
+    expect(serverOf('mcp____tool')).toBeUndefined()
+    expect(serverOf('mcp__github')).toBeUndefined()
+    expect(serverOf('github__create_issue')).toBeUndefined()
+  })
+
+  it('matches the prefix the way the harness writes it, and not otherwise', () => {
+    expect(serverOf('MCP__github__create_issue')).toBeUndefined()
+  })
+})
+
+describe('distance', () => {
   it('measures edit distance inside the budget', () => {
     expect(distance('issue', 'isue')).toBe(1)
     expect(distance('create', 'creat')).toBe(1)
     expect(distance('create', 'cerate')).toBe(1)
     expect(distance('query', 'qurey')).toBe(1)
+  })
+
+  it('measures two edits, which is what a long word is allowed', () => {
+    expect(distance('reaction', 'reaccton', 2)).toBe(2)
+  })
+
+  it('defaults to a budget of three', () => {
+    expect(distance('channels', 'channrlse')).toBe(2)
+  })
+
+  it('counts an empty string as the other one whole', () => {
+    expect(distance('', '', 3)).toBe(0)
+    expect(distance('', 'abc', 3)).toBe(3)
+    expect(distance('', 'abc', 2)).toBe(3)
+  })
+
+  it('takes a budget of zero as a real one: same or not', () => {
+    expect(distance('issue', 'issue', 0)).toBe(0)
+    expect(distance('issue', 'issuel', 0)).toBe(1)
   })
 
   it('reports max + 1, not a measurement, once past the budget', () => {
@@ -83,25 +134,35 @@ describe('suggest', () => {
     expect(suggest(tools, 'run_query')[0]).toBe('mcp__my_db__run_query')
   })
 
+  it('allows two mistakes in a word of eight letters or more, and none in a shorter one', () => {
+    expect(suggest(tools, 'add_reaccton')[0]).toBe('mcp__slack__add_reaction')
+    expect(suggest(tools, 'qerry')).toEqual([])
+  })
+
+  it('never guesses at a word too short to tell one from another', () => {
+    // `run_query` is one edit away, and "sun" is three letters: too little shared to call a typo.
+    expect(suggest(tools, 'sun')).toEqual([])
+  })
+
+  it('ranks the name sharing the most of the query first', () => {
+    expect(suggest(tools, 'github_create_issue')).toEqual([
+      'mcp__github__create_issue',
+      'mcp__github__list_issues',
+      'mcp__github__create_pull_request',
+    ])
+  })
+
+  it('answers at most the number of names asked for', () => {
+    expect(suggest(tools, 'issue', 1)).toEqual(['mcp__github__create_issue'])
+    expect(suggest(tools, 'issue')).toHaveLength(2)
+  })
+
   it('returns nothing when nothing is close', () => {
     expect(suggest(tools, 'kubernetes_pods')).toEqual([])
     expect(suggest(tools, '')).toEqual([])
   })
-})
 
-describe('summary', () => {
-  it('keeps the first sentence of the first line', () => {
-    expect(summary('Create an issue. Needs write access.\nMore.', 120)).toBe('Create an issue.')
-    expect(summary('No full stop here', 120)).toBe('No full stop here')
-  })
-
-  it('cuts a long sentence', () => {
-    expect(summary('a'.repeat(200), 20)).toBe(`${'a'.repeat(17)}...`)
-  })
-
-  it('respects a limit too small for an ellipsis', () => {
-    expect(summary('Create an issue.', 4)).toBe('C...')
-    expect(summary('Create an issue.', 3)).toBe('Cre')
-    expect(summary('Create an issue.', 0)).toBe('')
+  it('returns nothing for a query that is only the mcp marker', () => {
+    expect(suggest(tools, 'mcp__')).toEqual([])
   })
 })

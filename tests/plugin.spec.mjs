@@ -1,7 +1,11 @@
 /**
- * The plugin against the real DSH tool registry and prompt assembly: tools are registered on
- * agent scopes exactly as an ACP session's MCP servers are, every check reads the assembly a model
+ * The plugin against the real DSH tool registry and prompt assembly: tools are registered on agent
+ * scopes exactly as an ACP session's MCP servers are, every check reads the assembly a model
  * request would carry, and calls go through the registry's own execute pipeline.
+ *
+ * What these tests can only prove here is what the registry does to a call: who sees it, what comes
+ * back, and which agent sees which tools. The text of the index and the details is
+ * tests/index.spec.mjs; the name matching is tests/search.spec.mjs.
  */
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -19,6 +23,7 @@ const ISSUE_PARAMS = {
   required: ['title'],
 }
 
+/** A tool that says what it ran with, so a result can be read back as text. */
 function tool(name, description = `tool ${name}`, parameters = { type: 'object', properties: {} }, run) {
   return {
     name,
@@ -57,31 +62,35 @@ async function harness(config) {
       key.ctx.tools.register(n === 'create_issue' ? tool(full, description, ISSUE_PARAMS) : tool(full, description))
     }
   }
+
   const assemble = async key => (await ctx.systemPrompt.assemble({ scope: key })).tools
   const visible = async key => (await assemble(key)).map(t => t.name).sort()
+  const index = async (key, detailsToolName = 'tool_details') => (await assemble(key)).find(t => t.name === detailsToolName).description
   const call = (key, name, args = {}) => ctx.tools.execute({ signal, callId: 'c1', name, arguments: args, agent: key })
   const text = result => result.content.map(c => c.text).join('\n')
-  return { ctx, agent, mcp, assemble, visible, call, text }
+
+  return { ctx, agent, mcp, assemble, visible, index, call, text }
 }
 
+/** One agent with both servers connected and one step assembled, which is what fills its catalogue. */
 async function withTools(config) {
   const h = await harness(config)
   const a = await h.agent('a')
   h.mcp(a, 'github', GITHUB)
   h.mcp(a, 'slack', SLACK)
-  await h.assemble(a) // the first step's assembly, which fills the agent's catalogue
+  await h.assemble(a)
   return { ...h, a }
 }
 
-describe('dsh-tool-search', () => {
+describe('the index in the request', () => {
   it('sends an index of names and summaries in place of the definitions', async () => {
-    const { assemble, visible, a } = await withTools()
+    const { visible, index, a } = await withTools()
+    const text = await index(a)
     expect(await visible(a)).toEqual(['call_tool', 'read', 'tool_details'])
-    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
-    expect(index).toContain('Available tools (12)')
-    expect(index).toContain('github:\n- mcp__github__create_issue(title, body?): create issue on github.')
-    expect(index).toContain('slack:')
-    expect(index).not.toContain('Longer detail')
+    expect(text).toContain('Available tools (12)')
+    expect(text).toContain('github:\n- mcp__github__create_issue(title, body?): create issue on github.')
+    expect(text).toContain('slack:')
+    expect(text).not.toContain('Longer detail')
   })
 
   it('keeps the tool list identical while the model reads details and runs tools', async () => {
@@ -92,6 +101,43 @@ describe('dsh-tool-search', () => {
     expect(JSON.stringify(await assemble(a))).toBe(before)
   })
 
+  it('writes the index in each style', async () => {
+    const signed = await withTools({ indexStyle: 'signature' })
+    const summarised = await withTools({ indexStyle: 'summary' })
+    const named = await withTools({ indexStyle: 'names' })
+
+    const signedText = await signed.index(signed.a)
+    expect(signedText).toContain('- mcp__github__create_issue(title, body?): create issue on github.')
+    expect(signedText).toContain('call it directly')
+    expect(await summarised.index(summarised.a)).toContain('- mcp__github__create_issue: create issue on github.')
+    expect(await named.index(named.a)).toContain('- mcp__github__create_issue\n')
+  })
+
+  it('lists every name even when the summaries do not fit', async () => {
+    const { index, a } = await withTools({ indexChars: 200 })
+    const text = await index(a)
+    expect(text).toContain('Also available (ask tool_details for what they do):')
+    for (const n of [...GITHUB, ...SLACK]) expect(text).toContain(n)
+  })
+
+  it('follows the tools as they change between steps', async () => {
+    const h = await withTools()
+    expect(await h.index(h.a)).toContain('Available tools (12)')
+
+    h.mcp(h.a, 'slack', ['pin_message'])
+    const refreshed = await h.index(h.a)
+    expect(refreshed).toContain('Available tools (13)')
+    expect(refreshed).toContain('- mcp__slack__pin_message(): pin message on slack.')
+    expect((await h.call(h.a, 'tool_details', { names: ['mcp__slack__pin_message'] })).value.tools).toHaveLength(1)
+  })
+
+  it('keeps the tools registered while hiding them from the request', async () => {
+    const { ctx, a } = await withTools()
+    expect(ctx.tools.get('mcp__github__create_issue', a)).toBeDefined()
+  })
+})
+
+describe('tool_details', () => {
   it('returns the full description and parameters of the named tools', async () => {
     const { call, text, a } = await withTools()
     const result = await call(a, 'tool_details', { names: ['mcp__github__create_issue', 'mcp__slack__post_message'] })
@@ -117,7 +163,23 @@ describe('dsh-tool-search', () => {
     expect(text(result)).toContain('2 more name(s) not shown')
   })
 
-  it('runs a hidden tool with call_tool and hands back its result', async () => {
+  it('asks each name once, and ignores what is not a name', async () => {
+    const { call, a } = await withTools()
+    const result = await call(a, 'tool_details', { names: ['mcp__github__create_issue', 'mcp__github__create_issue', ' ', null, 7] })
+    expect(result.value.tools).toHaveLength(1)
+    expect(result.value.unknown).toEqual([])
+    expect(result.value.truncated).toBe(0)
+  })
+
+  it('answers a details call that asked for nothing', async () => {
+    const { call, text, a } = await withTools()
+    expect(text(await call(a, 'tool_details', { names: [] }))).toContain('Nothing to show')
+    expect(text(await call(a, 'tool_details', {}))).toContain('Nothing to show')
+  })
+})
+
+describe('call_tool', () => {
+  it('runs a hidden tool and hands back its result', async () => {
     const { call, text, a } = await withTools()
     const result = await call(a, 'call_tool', { name: 'mcp__github__create_issue', arguments: { title: 'Bug' } })
     expect(result.isError).toBe(false)
@@ -156,6 +218,53 @@ describe('dsh-tool-search', () => {
     expect((await call(a, 'call_tool', { name: 'read' })).isError).toBe(true)
   })
 
+  it('hands back every content block the tool returned', async () => {
+    const h = await harness({ minTools: 1 })
+    const a = await h.agent('a')
+    a.ctx.tools.register({
+      ...tool('mcp__x__blocks', 'Returns two blocks.'),
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }, { type: 'text', text: 'and the second one' }] },
+      execute: () => Promise.resolve('the first one'),
+    })
+    await h.assemble(a)
+    const result = await h.call(a, 'call_tool', { name: 'mcp__x__blocks' })
+    expect(result.content).toEqual([{ type: 'text', text: 'the first one' }, { type: 'text', text: 'and the second one' }])
+  })
+
+  it('ferries the tool\'s own deferred context out to the outer call', async () => {
+    const h = await harness({ minTools: 1 })
+    const a = await h.agent('a')
+    a.ctx.tools.register({
+      ...tool('mcp__x__context', 'Defers a note.'),
+      execute: (_args, exec) => {
+        exec.deferContext({ role: 'user', content: [{ type: 'text', text: 'a note from the tool' }] })
+        return Promise.resolve('ran')
+      },
+    })
+    await h.assemble(a)
+    const result = await h.call(a, 'call_tool', { name: 'mcp__x__context' })
+    expect(result.additionalContexts).toBeDefined()
+    expect(JSON.stringify(result.additionalContexts)).toContain('a note from the tool')
+  })
+
+  it('stops the turn when the tool it ran did', async () => {
+    const h = await harness({ minTools: 1 })
+    const a = await h.agent('a')
+    a.ctx.tools.register({
+      ...tool('mcp__x__done', 'Ends the turn.'),
+      execute: (_args, exec) => {
+        exec.concludeTurn()
+        return Promise.resolve('the answer')
+      },
+    })
+    await h.assemble(a)
+    const result = await h.call(a, 'call_tool', { name: 'mcp__x__done' })
+    expect(result.isError).toBe(false)
+    expect(result.concludesTurn).toBe(true)
+  })
+})
+
+describe('agents and modes', () => {
   it('keeps each agent to its own tools', async () => {
     const h = await harness()
     const a = await h.agent('a')
@@ -165,35 +274,10 @@ describe('dsh-tool-search', () => {
     h.mcp(b, 'slack', [...SLACK, 'pin_message', 'set_topic', 'archive_channel', 'invite_user'])
     await h.assemble(a)
     await h.assemble(b)
+
+    expect(await h.index(b)).not.toContain('github')
     expect((await h.call(b, 'call_tool', { name: 'mcp__github__create_issue' })).isError).toBe(true)
-    const index = (await h.assemble(b)).find(t => t.name === 'tool_details').description
-    expect(index).not.toContain('github')
-  })
-
-  it('sends everything when too few tools match to be worth it', async () => {
-    const h = await harness()
-    const a = await h.agent('a')
-    h.mcp(a, 'github', ['create_issue', 'list_issues'])
-    expect(await h.visible(a)).toEqual(['mcp__github__create_issue', 'mcp__github__list_issues', 'read'])
-  })
-
-  it('honours exclude, alwaysLoad and the tool names', async () => {
-    const h = await harness({
-      detailsToolName: 'find_tools',
-      callToolName: 'use_tool',
-      exclude: ['mcp__slack__'],
-      alwaysLoad: ['mcp__github__create_issue'],
-      minTools: 1,
-    })
-    const a = await h.agent('a')
-    h.mcp(a, 'github', GITHUB)
-    h.mcp(a, 'slack', SLACK)
-    const names = await h.visible(a)
-    expect(names).toContain('find_tools')
-    expect(names).toContain('use_tool')
-    expect(names).toContain('mcp__github__create_issue')
-    expect(names).toContain('mcp__slack__post_message')
-    expect(names).not.toContain('mcp__github__list_issues')
+    expect((await h.call(b, 'tool_details', { names: ['mcp__github__create_issue'] })).value.unknown).toHaveLength(1)
   })
 
   it('defers tools registered globally too, not only on the agent', async () => {
@@ -201,57 +285,6 @@ describe('dsh-tool-search', () => {
     for (const n of GITHUB) h.ctx.tools.register(tool(`mcp__github__${n}`))
     const a = await h.agent('a')
     expect(await h.visible(a)).toEqual(['call_tool', 'read', 'tool_details'])
-  })
-
-  it('lists every name even when the summaries do not fit', async () => {
-    const { assemble, a } = await withTools({ indexChars: 200 })
-    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
-    expect(index).toContain('Also available (ask tool_details for what they do):')
-    for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
-  })
-
-  it('writes the index in each style', async () => {
-    const index = async indexStyle => {
-      const { assemble, a } = await withTools({ indexStyle })
-      return (await assemble(a)).find(t => t.name === 'tool_details').description
-    }
-    expect(await index('names')).toContain('- mcp__github__create_issue\n')
-    expect(await index('summary')).toContain('- mcp__github__create_issue: create issue on github.')
-    const signed = await index('signature')
-    expect(signed).toContain('- mcp__github__create_issue(title, body?): create issue on github.')
-    expect(signed).toContain('call it directly')
-  })
-
-  it('refuses a tool name this agent already has, instead of shadowing it', async () => {
-    const h = await harness({ detailsToolName: 'read', minTools: 1 })
-    await expect(h.agent('a')).rejects.toThrow(/detailsToolName is "read", a tool this agent already has/)
-    expect(h.ctx.tools.get('read').description).toBe('Read a file')
-  })
-
-  it('gives every server in the index a tool under it', async () => {
-    const { assemble, a } = await withTools({ indexChars: 300 })
-    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
-    expect(index).not.toContain('slack:')
-    for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
-  })
-
-  it('lists names only when not even a server header fits', async () => {
-    const { assemble, a } = await withTools({ indexChars: 10 })
-    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
-    expect(index.split('\n').filter(line => /^[a-z0-9_]+:$/.test(line))).toEqual([])
-    for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
-  })
-
-  it('names the configured details tool in the name-only list', async () => {
-    const { assemble, a } = await withTools({ detailsToolName: 'find_tools', callToolName: 'use_tool', indexChars: 300 })
-    const index = (await assemble(a)).find(t => t.name === 'find_tools').description
-    expect(index).toContain('Also available (ask find_tools for what they do):')
-  })
-
-  it('answers a details call that asked for nothing', async () => {
-    const { call, text, a } = await withTools()
-    expect(text(await call(a, 'tool_details', { names: [] }))).toContain('Nothing to show')
-    expect(text(await call(a, 'tool_details', {}))).toContain('Nothing to show')
   })
 
   it('stands down for an agent in PTC mode, whose programs see every tool anyway', async () => {
@@ -281,7 +314,10 @@ describe('dsh-tool-search', () => {
       description: 'Report your final structured result.',
       parameters: schema,
       output: { schema: { type: 'object' }, render: () => [{ type: 'text', text: 'Structured output recorded.' }] },
-      execute: (_args, exec) => { exec.concludeTurn(); return Promise.resolve({ recorded: true }) },
+      execute: (_args, exec) => {
+        exec.concludeTurn()
+        return Promise.resolve({ recorded: true })
+      },
     })
     const tools = await h.assemble(a)
     expect(tools.find(t => t.name === 'structured_output').parameters).toEqual(schema)
@@ -290,13 +326,54 @@ describe('dsh-tool-search', () => {
     expect(result.isError).toBe(false)
     expect(result.concludesTurn).toBe(true)
   })
+})
 
-  it('refuses a configuration that cannot work', () => {
-    expect(() => ToolSearch.resolveConfig({ callToolName: 'run_code' })).toThrow(/reserves/)
-    expect(() => ToolSearch.resolveConfig({ indexStyle: 'full' })).toThrow(/indexStyle/)
-    expect(() => ToolSearch.resolveConfig({ detailsToolName: 'bad name' })).toThrow(/detailsToolName/)
-    expect(() => ToolSearch.resolveConfig({ callToolName: 'tool_details' })).toThrow(/must differ/)
-    expect(() => ToolSearch.resolveConfig({ match: 'mcp__' })).toThrow(/match/)
-    expect(() => ToolSearch.resolveConfig({ maxDetails: 0 })).toThrow(/maxDetails/)
+describe('configuration', () => {
+  it('sends everything when too few tools match to be worth it', async () => {
+    const h = await harness()
+    const a = await h.agent('a')
+    h.mcp(a, 'github', ['create_issue', 'list_issues'])
+    expect(await h.visible(a)).toEqual(['mcp__github__create_issue', 'mcp__github__list_issues', 'read'])
+  })
+
+  it('honours exclude, alwaysLoad, a custom match and the tool names', async () => {
+    const h = await harness({
+      detailsToolName: 'find_tools',
+      callToolName: 'use_tool',
+      match: ['mcp__', 'web_'],
+      exclude: ['mcp__slack__'],
+      alwaysLoad: ['mcp__github__create_issue'],
+      minTools: 1,
+    })
+    h.ctx.tools.register(tool('web_search', 'Search the web.'))
+    const a = await h.agent('a')
+    h.mcp(a, 'github', GITHUB)
+    h.mcp(a, 'slack', SLACK)
+    const names = await h.visible(a)
+    expect(names).toContain('find_tools')
+    expect(names).toContain('use_tool')
+    expect(names).toContain('mcp__github__create_issue')
+    expect(names).toContain('mcp__slack__post_message')
+    expect(names).not.toContain('mcp__github__list_issues')
+    expect(names).not.toContain('web_search')
+    // The index rides along in whichever tool carries it.
+    expect(await h.index(a, 'find_tools')).toContain('Available tools (')
+  })
+
+  it('refuses a tool name this agent already has, instead of shadowing it', async () => {
+    const h = await harness({ detailsToolName: 'read', minTools: 1 })
+    await expect(h.agent('a')).rejects.toThrow(/detailsToolName is "read", a tool this agent already has/)
+    expect(h.ctx.tools.get('read').description).toBe('Read a file')
+
+    const h2 = await harness({ callToolName: 'read', minTools: 1 })
+    await expect(h2.agent('a')).rejects.toThrow(/callToolName is "read"/)
+    expect(h2.ctx.tools.get('read').description).toBe('Read a file')
+  })
+
+  it('refuses a configuration that cannot work when the plugin loads', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt, {})
+    await ctx.plugin(ToolRuntime)
+    await expect(ctx.plugin(ToolSearch, { indexStyle: 'full' })).rejects.toThrow(/indexStyle/)
   })
 })

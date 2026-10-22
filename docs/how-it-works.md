@@ -294,15 +294,19 @@ layer.
 
 The invariants worth re-checking after any edit, and how the current code was checked:
 
-- **Index determinism.** Same tools, shuffled arrival order → byte-identical output. Any change to
-  grouping or sorting should be re-run against this.
+- **Index determinism.** Same tools, shuffled arrival order → byte-identical output. Pinned in
+  `tests/index.spec.mjs`; any change to grouping or sorting should be re-run against it.
 - **Old-vs-new output equality.** 960 generated catalogues (1-40 tools per server × 2-4 servers × 6
   config sets) comparing `buildIndex` output: identical except where an empty server header used to be
   emitted, and the configured `detailsToolName` in the name-only line.
-- **Summary budget.** Every limit 0-40, output length never exceeds the limit.
+- **Summary budget.** Every limit 0-40, output length never exceeds the limit. Now a loop inside
+  `tests/index.spec.mjs`, so it fails on its own instead of waiting for a manual run.
 - **Suggestion correctness.** `distance` is fuzzed against a full-matrix reference implementation; see
   the end of `name-matching.md`.
-- `npm test` covers the plugin against the real DSH registry: the tool list stays identical across
-  details reads and calls, a policy denial fires on the nested name, each agent keeps to its own tools,
-  and every name survives a tight index budget.
+- **What the tests cover.** `npm test` runs three files, one per source file: `tests/search.spec.mjs`
+  for the name matching, `tests/index.spec.mjs` for the text and configuration helpers as plain
+  functions, and `tests/plugin.spec.mjs` for what only the live registry can show — the tool list
+  staying identical across reads and calls, a policy denial firing on the nested name, deferred
+  context and the turn-ending marker ferrying out of a nested call, each agent keeping to its own
+  tools, PTC and structured-output agents left alone, and every name surviving a tight index budget.
 - `e2e/run.sh` is the only check that exercises a live model against the index prose.
