@@ -11,8 +11,10 @@ DSH host
     │   ├── AgentTools state           the agent's deferred tools, from its latest assembly
     │   ├── tool_details  (registered) description = the index; returns full definitions by name
     │   ├── call_tool     (registered) runs a deferred tool as a nested registry call
+    │   ├── session/event              notes each new user message
+    │   ├── prompt context             prefetch: the best-matching tools in full, after the history
     │   └── system-prompt/assemble     scoped waterfall listener: hides deferred tools, writes the index
-    └── search.mjs                     name helpers: words, serverOf, suggest (closest names)
+    └── search.mjs                     name helpers: words, serverOf, suggest (closest names), rank (request -> tools)
 ```
 
 What the model sees each step:

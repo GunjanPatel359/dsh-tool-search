@@ -1,63 +1,51 @@
 # 7. Results
 
-From `e2e/run.sh`, 21 Oct 2026, DSH 0.2.1-rc.2. One task: compute 17 + 25 with the `add` tool, write it to
-`notes/today.md` in the filesystem server's directory, list the directory. Provider-reported usage, summed over
-every step; means of 3 runs per side (min-max in `e2e/out/*` when you rerun).
+From `e2e/run.sh`, 22 Oct 2026, DSH 0.2.1-rc.2. One task: compute 17 + 25 with the `add` tool, write it to
+`notes/today.md` in the filesystem server's directory, list the directory. Provider-reported usage, summed over every
+step of the task; 3 runs per cell; every column run with the same harness (dsh started inside the sandbox).
 
-- **small**: filesystem + everything servers, about 25 MCP tools.
-- **large**: + memory, Playwright, Chrome DevTools, about 75 MCP tools.
+- **25 tools**: filesystem + everything servers.
+- **75 tools**: + memory, Playwright, Chrome DevTools.
 
-## Totals (plugin with the `summary` index, before `signature` became the default)
+## Tokens per task
 
-| Model, servers | Tokens without | Tokens with | Change | Steps without -> with | Finished |
-|---|---|---|---|---|---|
-| OpenAI gpt-5.4-mini, small | 48,987 | 29,594 | **-40%** | 5 -> 4 | 3/3, 3/3 |
-| DeepSeek deepseek-flash, small | 101,423 | 81,174 | **-20%** | 7 -> 8 | 3/3, 3/3 |
-| DeepSeek deepseek-flash, large | 180,478 | 162,159 | **-10%** | 7 -> 11 | 3/3, 3/3 |
-| Claude claude-haiku-5-5, small | 79,343 | 93,112 | **+17%** | 4 -> 6 | 3/3, 3/3 |
-| Gemini gemini-3.5-flash, small | not measured | | | | free-tier key: 5 requests/min |
-
-## Per-step prompt (first step)
-
-| Setup | Without | With | Change |
+| Model | No plugin | Plugin (`signature`, prefetch off) | Plugin + prefetch 5 |
 |---|---|---|---|
-| DeepSeek, small | 12,772 | 8,556 | -33% |
-| DeepSeek, large | 26,351 | 10,116 | **-62%** |
-| Claude, small | 17,675 | 12,565 | -29% |
-| OpenAI, small | 8,870 | 6,562 | -26% |
+| DeepSeek deepseek-flash, 25 tools | 80,777 | **58,864 (-27%)** | 67,299 (-17%) |
+| DeepSeek deepseek-flash, 75 tools | 183,274 | **79,838 (-56%)** | 80,924 (-56%) |
+| Claude claude-haiku-5-5, 25 tools | 110,598 | **94,422 (-15%)** | 94,303 (-15%) |
+| OpenAI gpt-5.4-mini, 25 tools | 50,846 | **23,398 (-54%)** | 50,355 (-1%) |
 
-The saving per step grows with the catalogue. The net saving does not grow with it, because steps go up.
+36/36 runs finished the task. Gemini was not measured (free-tier key: 5 requests a minute).
 
-## Index style A/B (Claude, small, 3 runs each)
+## Per request
 
-| `indexStyle` | Tokens | Lookups per run | Detours into built-ins |
-|---|---|---|---|
-| none (no plugin) | 79,343 | | |
-| `names` | 79,840 | 1-2 | 1 of 3 runs |
-| `summary` | ~100,000 (6 runs) | 1-2 | 2 of 6 runs |
-| `signature` | 80,542 | always 1 | none |
+Going from 25 to 75 tools added 13,579 tokens to the first request without the plugin and 1,560 with it: the plugin
+removes about **88%** of what MCP tools cost per request, the same figure Agno's provider-native tool search reports
+(agno PR #11219). The rest of a request (DSH's system prompt, its ~15 built-in tools, the conversation) is the same with
+or without the plugin, which is why per-task percentages are smaller than 88%.
 
-`signature` is now the default: the steadiest, and back to the no-plugin cost on the model that did worst.
-`names` and `signature` are within noise of each other at 3 runs.
+## What changed along the way
+
+| Version | What we saw |
+|---|---|
+| Load a tool's definition on search | Every load changed the tool list and invalidated the provider cache for the whole conversation. Replaced. |
+| Fixed list, `summary` index | Per request -29% to -62%, but per task -40% to +17%: models looked up most tools first (one extra step each). |
+| `signature` index (now default) | Parameter names in the index; models call most tools directly. -15% to -56% per task. |
+| Prefetch (now off) | Attaching matched tools' details to each message removed few lookups (there were few left) and cost ~3k tokens a message; OpenAI also moved to built-in tools. Kept as an option. |
 
 ## What the runs show
 
-1. **The model uses the index correctly.** Every run on every model picked real tool names, mostly in one
-   `tool_details` call covering several tools, then ran them with `call_tool`. 21/21 plugin runs finished.
-2. **The prompt cache holds.** Cache reads grow step by step with the plugin, as without it.
-3. **The cost is extra steps, not the index.** One step resends the whole prompt (10-25k tokens); the index is
-   a few hundred. Steps come from: the lookup itself, models calling fewer tools per step, and detours.
-4. **Models detour into built-in tools.** With the plugin, DeepSeek on the large setup used `bash` / `read` to
-   explore instead of the (indexed) filesystem tools: 7 -> 11 steps, which ate most of a 62% per-step saving.
-   Tools that overlap built-ins should be kept visible (`exclude` / `alwaysLoad`).
-5. **Wrong names recover.** Models twice asked for `add` (the task's wording); the closest-names reply led to
-   `get-sum` without a failed call.
-6. **Model differences are large.** OpenAI got cheaper and faster; Claude batches calls without the plugin and
-   loses that with it.
+1. **The model uses the index correctly.** Real names every time; a wrong name (`add`) recovered through the
+   closest-names reply.
+2. **The prompt cache holds.** Cache reads grow step by step, as without the plugin.
+3. **Extra steps were the cost, not the index.** Each step resends the whole prompt; the index is a few hundred tokens.
+   Giving the model parameter names removed most lookups.
+4. **Models may route around indexed tools** to built-ins (`bash`, `write`) when those can do the job. Keep MCP tools
+   that must be the path visible (`exclude` / `alwaysLoad`).
 
 ## Caveats
 
-- One small task. Real conversations with many turns and few tool uses should favour the plugin more (each turn
-  resends the definitions; lookups stay in history).
-- Three runs per cell; ranges overlap in several rows.
-- Cheap models only. Gemini not measured.
+- One small task. Long multi-turn conversations with few tool uses should favour the plugin more.
+- Three runs per cell; ranges in `e2e/out/` overlap in places (Claude: 71k-113k with the plugin).
+- Cheap models only.

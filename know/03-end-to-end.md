@@ -7,7 +7,8 @@
    - collects the deferrable tools (`match` prefixes, minus `exclude`, minus `alwaysLoad`) into the agent's catalogue;
    - if fewer than `minTools`, leaves everything as is and hides its own two tools;
    - otherwise removes the deferred tools and sets `tool_details`' description to the index.
-5. **The model picks names** from the index and calls `tool_details({names})`. It gets each tool's full description and JSON schema back as a normal tool result (stays in history, cached).
-6. **The model calls `call_tool({name, arguments})`.** The plugin checks the name is in the catalogue, then calls `ctx.tools.execute()` with the real name, the agent, the signal, and the outer call's `rootCallId` / `token`. The registry runs its full pipeline: `tools/pre-execute` policies, guards, approvals, the tool, post-execute.
-7. **Result.** A failure or denial becomes a failed `call_tool`. A success hands back the nested content unchanged (images included) through `finalizeContent`; deferred contexts and `concludeTurn` are forwarded.
-8. **Next step.** The assembly is identical to the last one (same tools, same index), so the provider's prompt cache keeps the whole prefix.
+5. **Prefetch (optional, `prefetch` > 0; off by default).** When a user message arrives (`session/event`, `user/message`), the plugin ranks the deferred tools against it (`rank()`: name words 3, description words 1, server words 1, at least one non-server hit) and, through a scoped prompt context, attaches the top `prefetch` (at most 10, within `prefetchChars`) in full. DSH appends that context after the history; the text stays the same for the whole turn.
+6. **The model picks names** from the index and calls `tool_details({names})`. It gets each tool's full description and JSON schema back as a normal tool result (stays in history, cached).
+7. **The model calls `call_tool({name, arguments})`** (directly for attached tools). The plugin checks the name is in the catalogue, then calls `ctx.tools.execute()` with the real name, the agent, the signal, and the outer call's `rootCallId` / `token`. The registry runs its full pipeline: `tools/pre-execute` policies, guards, approvals, the tool, post-execute.
+8. **Result.** A failure or denial becomes a failed `call_tool`. A success hands back the nested content unchanged (images included) through `finalizeContent`; deferred contexts and `concludeTurn` are forwarded.
+9. **Next step.** The assembly is identical to the last one (same tools, same index), so the provider's prompt cache keeps the whole prefix.

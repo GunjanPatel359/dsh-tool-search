@@ -10,4 +10,8 @@
 | Nested `ctx.tools.execute` with the real name | Permission policies, guards, approvals and hooks see the real tool, not `call_tool`. |
 | `minTools` (default 10) | Below it the extra lookup step costs more than the definitions. |
 | Only `mcp__*` by default | Built-ins are few and used every turn; MCP tools come in bulk. `match` accepts any prefix. |
+| Prefetch exists but is off by default | A lookup is a full model request (stateless APIs), so attaching likely tools before the model asks can remove it. Measured: with the `signature` index few lookups were left, and the attached details cost more than they saved. |
+| `signature` index by default | Parameter names let models call most tools without a lookup; it brought every measured model to a saving (-15% to -56% per task). |
+| Attached details go in a prompt context, not the tool list | Contexts are appended after the history and re-logged only when they change, so the cache holds. |
+| At most 10 attached tools, a size budget, a minimum score | A request that matches everything must not undo the saving. |
 | Plain `.mjs`, no imports from DSH | Loads as a single file from any patch row; nothing to build. |

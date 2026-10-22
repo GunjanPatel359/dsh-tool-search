@@ -11,7 +11,9 @@
 | `buildIndex(tools, config)` | the grouped, sorted index; past `indexChars` lists names only |
 | `describeDetails(tools, config)` | `tool_details`' description: usage text + index |
 | `renderDetails(value, config)` | what the model reads back from `tool_details` |
-| `AgentTools` | per-agent state: `filter()` rewrites an assembly's tools, `details()` answers a lookup |
+| `AgentTools` | per-agent state: `filter()` rewrites an assembly's tools, `details()` answers a lookup, `noteRequest()` / `prefetchText()` pick and cache the attached details |
+| `renderPrefetch(tools, config)` | the attached details, capped at `MAX_PREFETCH` (10) and `prefetchChars` |
+| `signature(parameters)` | `(path, content, mode?)` for the `signature` index style |
 | `detailsTool(state)` | the `tool_details` tool definition |
 | `callTool(state, tools)` | the `call_tool` tool definition: nested `tools.execute`, `finalizeContent` pass-through |
 | `apply(ctx, config)` | wires it all on `agent/created` |
@@ -24,6 +26,8 @@
 | `serverOf(name)` | the `<server>` in `mcp__<server>__<tool>` |
 | `distance(a, b, max)` | edit distance with early exit |
 | `suggest(tools, name)` | closest real names for a wrong one (shared words, typo tolerance) |
+| `stem`, `terms` | crude stemming and stopword removal for matching |
+| `rank(tools, text, limit, minScore)` | the tools a request most likely needs, by word overlap |
 
 ## Other files
 

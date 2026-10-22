@@ -20,7 +20,7 @@
  * so permission policies, hooks and approvals see the real tool name and arguments.
  */
 
-import { serverOf, suggest } from './search.mjs'
+import { rank, serverOf, suggest } from './search.mjs'
 
 export const name = 'dsh-tool-search'
 export const inject = ['tools', 'systemPrompt']
@@ -39,6 +39,17 @@ export const DEFAULTS = Object.freeze({
   alwaysLoad: [],
   /** Defer only when at least this many tools match; fewer cost less than the extra step does. */
   minTools: 10,
+  /**
+   * Tools whose full details are attached to each new user message, picked by matching the message
+   * against the index, so the model can run them without a `tool_details` step. 0 turns it off;
+   * never more than MAX_PREFETCH, however many tools match. Off by default: with the `signature`
+   * index models rarely need a lookup, and in our runs the attached details cost more than they saved.
+   */
+  prefetch: 0,
+  /** Characters of attached details per message: tools are added best first while they fit. */
+  prefetchChars: 12000,
+  /** The least match score a tool needs to be attached (a word in its name scores 3). */
+  prefetchMinScore: 3,
   /** The most tools one `tool_details` call returns. */
   maxDetails: 10,
   /**
@@ -55,6 +66,8 @@ export const DEFAULTS = Object.freeze({
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/
 const INDEX_STYLES = ['names', 'summary', 'signature']
+/** The hard ceiling on attached tools: past it, a request that matches everything would undo the plugin. */
+export const MAX_PREFETCH = 10
 
 /** Merge and check a configuration. Throws on a value that cannot work. */
 export function resolveConfig(config = {}) {
@@ -72,12 +85,13 @@ export function resolveConfig(config = {}) {
       throw new Error(`dsh-tool-search: ${key} must be a list of strings`)
     }
   }
-  for (const key of ['minTools', 'maxDetails', 'summaryChars', 'indexChars']) {
+  for (const key of ['minTools', 'maxDetails', 'summaryChars', 'indexChars', 'prefetch', 'prefetchMinScore', 'prefetchChars']) {
     if (!Number.isInteger(resolved[key]) || resolved[key] < 0) {
       throw new Error(`dsh-tool-search: ${key} must be a whole number of 0 or more`)
     }
   }
   if (resolved.maxDetails < 1) throw new Error('dsh-tool-search: maxDetails must be at least 1')
+  if (resolved.prefetch > MAX_PREFETCH) throw new Error(`dsh-tool-search: prefetch must be at most ${MAX_PREFETCH}`)
   if (!INDEX_STYLES.includes(resolved.indexStyle)) {
     throw new Error(`dsh-tool-search: indexStyle must be one of ${INDEX_STYLES.join(', ')}`)
   }
@@ -160,17 +174,42 @@ export function describeDetails(deferred, config) {
   const head = [
     'More tools are available than are listed among your tools; they are indexed below.',
     ...how,
+    ...(config.prefetch > 0
+      ? [`The full details of the tools that best match the latest request may already follow the conversation; run those directly with ${config.callToolName}.`]
+      : []),
     'Check this index before saying a capability is missing.',
   ].join(' ')
   return `${head}\n\nAvailable tools (${deferred.length}):\n${buildIndex(deferred, config)}`
 }
 
+/** One tool in full, as `tool_details` and the attached details write it. */
+function detailBlock(tool) {
+  return [`## ${tool.name}`, String(tool.description ?? '').trim(), `Parameters: ${JSON.stringify(tool.parameters ?? {})}`, ''].join('\n')
+}
+
+/**
+ * The context attached to a user message: the matched tools in full, best first, at most
+ * MAX_PREFETCH of them and only while they fit in `prefetchChars`. A tool too large to fit is
+ * skipped rather than cut, so the model never sees half a schema.
+ */
+export function renderPrefetch(tools, config) {
+  const head = `Tool details matched to the latest request (from the ${config.detailsToolName} index). Run any of them directly with ${config.callToolName}; use ${config.detailsToolName} only for other tools.`
+  const blocks = []
+  let used = head.length
+  for (const tool of tools.slice(0, Math.min(config.prefetch, MAX_PREFETCH))) {
+    const block = detailBlock(tool)
+    if (used + block.length + 1 > config.prefetchChars) continue
+    blocks.push(block)
+    used += block.length + 1
+  }
+  if (blocks.length === 0) return ''
+  return [head, '', ...blocks].join('\n').trimEnd()
+}
+
 /** What the model reads back: each tool in full, and the closest names for any it got wrong. */
 export function renderDetails(value, config) {
   const lines = []
-  for (const tool of value.tools) {
-    lines.push(`## ${tool.name}`, String(tool.description ?? '').trim(), `Parameters: ${JSON.stringify(tool.parameters ?? {})}`, '')
-  }
+  for (const tool of value.tools) lines.push(detailBlock(tool))
   if (value.tools.length > 0) lines.push(`Run one with ${config.callToolName}({"name": "<tool name>", "arguments": {...}}).`)
   for (const miss of value.unknown) {
     lines.push(miss.closest.length > 0
@@ -213,6 +252,29 @@ export class AgentTools {
   constructor(config) {
     this.config = config
     this.catalog = new Map()
+    this.request = ''
+    this.attached = { request: undefined, text: '' }
+  }
+
+  /** Remember the latest user message; its matches are attached from the next assembly on. */
+  noteRequest(text) {
+    if (typeof text === 'string' && text.trim()) this.request = text
+  }
+
+  /**
+   * The details to attach for the latest request: the same text for every step of a turn, so the
+   * context snapshot (and the cache after it) only changes when a new user message arrives.
+   * @param tools - the agent's visible tools for this assembly.
+   */
+  prefetchText(tools) {
+    if (this.config.prefetch < 1 || !this.request) return ''
+    if (this.attached.request === this.request) return this.attached.text
+    const deferrable = tools.filter(t => isDeferrable(t.name, this.config))
+    const active = deferrable.length >= Math.max(1, this.config.minTools)
+    const limit = Math.min(this.config.prefetch, MAX_PREFETCH)
+    const picked = active ? rank(deferrable, this.request, limit, this.config.prefetchMinScore) : []
+    this.attached = { request: this.request, text: renderPrefetch(picked, this.config) }
+    return this.attached.text
   }
 
   /** Rewrite one assembly's tool list: keep the deferred tools out, and put their index in. */
@@ -329,6 +391,18 @@ export function apply(ctx, config) {
     const state = new AgentTools(resolved)
     scope.effect(() => scope.tools.register(detailsTool(state)))
     scope.effect(() => scope.tools.register(callTool(state, ctx.tools)))
+    scope.on('session/event', (_session, event) => {
+      if (event?.type !== 'user/message' || event.data?.source?.kind === 'tool') return
+      const content = Array.isArray(event.data?.content) ? event.data.content : []
+      state.noteRequest(content.filter(block => block?.type === 'text').map(block => block.text).join('\n'))
+    })
+    scope.effect(() => scope.systemPrompt.context({
+      name: 'dsh-tool-search:prefetch',
+      order: 5000,
+      interpolate: false,
+      required: true,
+      text: context => state.prefetchText(ctx.tools.schemas(context?.scope ?? agent)),
+    }))
     scope.on('system-prompt/assemble', async (_assembly, _context, next) => {
       const assembled = await next()
       assembled.tools = state.filter(assembled.tools)
