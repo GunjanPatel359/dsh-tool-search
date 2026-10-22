@@ -10,6 +10,7 @@
   },
   "files": [
     "src",
+    "docs",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -31,9 +32,9 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.5",
-    "@deepseek-ai/dsh-scope": "^0.0.1-rc.5",
-    "@deepseek-ai/dsh-system-prompt": "^0.0.1-rc.5",
-    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-scope": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "^0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.2",
     "vitest": "^5.0.5"
   },
   "dsh": {

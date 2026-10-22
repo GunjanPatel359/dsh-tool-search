@@ -1,23 +1,6 @@
 /**
  * dsh-tool-search: deferred tool loading for DSH (built on DeepSeek Harness).
- *
- * Every tool definition is resent on every model request. An agent with a few MCP servers carries
- * hundreds of definitions it never uses, which costs tokens on each step and makes the model choose
- * worse. This plugin sends the matching tools (by default every `mcp__*` tool) as a compact index
- * instead: each tool's name and a one-line summary, in the description of a `tool_details` tool.
- * The model picks names from the index, reads their full description and parameters with
- * `tool_details`, and runs one with `call_tool`.
- *
- * The tool list the model sees never changes during a session. That is the point of `call_tool`:
- * adding a tool's definition mid-session would change the top of the request, and on most routes
- * the provider's prompt cache would then be rebuilt for the whole conversation, every time. Here
- * the details are an ordinary tool result, appended to the history and cached with it.
- *
- * How it hides tools: a scoped listener on `system-prompt/assemble`, the one place the tool list of
- * every request passes through. `ctx.tools.restrict()` cannot be used: it only reaches tools a
- * scope inherits, and MCP servers mounted through an ACP session are registered on the agent's own
- * scope. Hidden tools stay registered; `call_tool` runs them through the registry's own pipeline,
- * so permission policies, hooks and approvals see the real tool name and arguments.
+ * How it works: docs/how-it-works.md.
  */
 
 import { serverOf, suggest } from './search.mjs'
@@ -25,36 +8,22 @@ import { serverOf, suggest } from './search.mjs'
 export const name = 'dsh-tool-search'
 export const inject = ['tools', 'systemPrompt']
 
-/** The defaults, each overridable from the plugin's configuration. */
 export const DEFAULTS = Object.freeze({
-  /** The name the model reads tool details with. */
   detailsToolName: 'tool_details',
-  /** The name the model runs a deferred tool with. */
   callToolName: 'call_tool',
-  /** A tool whose name starts with one of these is deferred... */
   match: ['mcp__'],
-  /** ...unless its name starts with one of these. */
   exclude: [],
-  /** Exact names always sent in full, whatever `match` says. */
   alwaysLoad: [],
-  /** Defer only when at least this many tools match; fewer cost less than the extra step does. */
   minTools: 10,
-  /** The most tools one `tool_details` call returns. */
   maxDetails: 10,
-  /**
-   * What each index line carries: 'names' (the name), 'summary' (name and the first sentence of
-   * its description) or 'signature' (name, parameter names and summary; the model may then call a
-   * simple tool without reading its details first).
-   */
   indexStyle: 'signature',
-  /** Characters of each tool's summary in the index. */
   summaryChars: 120,
-  /** Characters of the whole index; past it, the remaining tools are listed by name only. */
   indexChars: 12000,
 })
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/
 const INDEX_STYLES = ['names', 'summary', 'signature']
+const RUN_CODE = 'run_code'
 
 /** Merge and check a configuration. Throws on a value that cannot work. */
 export function resolveConfig(config = {}) {
@@ -63,6 +32,7 @@ export function resolveConfig(config = {}) {
     if (typeof resolved[key] !== 'string' || !TOOL_NAME.test(resolved[key])) {
       throw new Error(`dsh-tool-search: ${key} must be 1-64 letters, digits, "_" or "-", got ${JSON.stringify(resolved[key])}`)
     }
+    if (resolved[key] === RUN_CODE) throw new Error(`dsh-tool-search: ${key} cannot be "${RUN_CODE}", which DSH reserves`)
   }
   if (resolved.detailsToolName === resolved.callToolName) {
     throw new Error('dsh-tool-search: detailsToolName and callToolName must differ')
@@ -97,7 +67,11 @@ export function isDeferrable(toolName, config) {
 export function summary(description, limit) {
   const line = String(description ?? '').trim().split('\n')[0].trim()
   const sentence = /^(.+?[.!?])(\s|$)/.exec(line)?.[1] ?? line
-  return sentence.length > limit ? `${sentence.slice(0, Math.max(0, limit - 3)).trimEnd()}...` : sentence
+
+  if (sentence.length <= limit) return sentence
+  if (limit < 4) return sentence.slice(0, limit)
+
+  return `${sentence.slice(0, limit - 3).trimEnd()}...`
 }
 
 /** A tool's parameter names, optional ones marked `?`: `(path, content, mode?)`. */
@@ -114,35 +88,41 @@ function indexLine(tool, config) {
   return `- ${head}: ${summary(tool.description, config.summaryChars)}`
 }
 
-/**
- * The index of deferred tools, grouped by server and sorted, so the same tools always give the
- * same text and the request prefix it sits in stays cacheable. Past `indexChars` the remaining
- * tools are listed by name only: every name is always there.
- */
+/** The index of deferred tools, grouped by server and sorted; past `indexChars`, names only. */
 export function buildIndex(tools, config) {
   const groups = new Map()
+
   for (const tool of [...tools].sort((a, b) => a.name.localeCompare(b.name))) {
     const server = serverOf(tool.name) ?? 'other'
     if (!groups.has(server)) groups.set(server, [])
     groups.get(server).push(tool)
   }
+
   const lines = []
   const unsummarized = []
   let used = 0
+
   for (const [server, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
-    lines.push(`${server}:`)
-    used += server.length + 2
+    const header = `${server}:`
+    const groupLines = []
+
     for (const tool of group) {
       const line = indexLine(tool, config)
-      if (unsummarized.length === 0 && used + line.length + 1 <= config.indexChars) {
-        lines.push(line)
-        used += line.length + 1
+      const cost = line.length + 1 + (groupLines.length === 0 ? header.length + 1 : 0)
+
+      if (unsummarized.length === 0 && used + cost <= config.indexChars) {
+        groupLines.push(line)
+        used += cost
       } else {
         unsummarized.push(tool.name)
       }
     }
+
+    if (groupLines.length > 0) lines.push(header, ...groupLines)
   }
-  if (unsummarized.length > 0) lines.push(`Also available (ask tool_details for what they do): ${unsummarized.join(', ')}`)
+
+  if (unsummarized.length > 0) lines.push(`Also available (ask ${config.detailsToolName} for what they do): ${unsummarized.join(', ')}`)
+
   return lines.join('\n')
 }
 
@@ -168,16 +148,23 @@ export function describeDetails(deferred, config) {
 /** What the model reads back: each tool in full, and the closest names for any it got wrong. */
 export function renderDetails(value, config) {
   const lines = []
+
   for (const tool of value.tools) {
     lines.push(`## ${tool.name}`, String(tool.description ?? '').trim(), `Parameters: ${JSON.stringify(tool.parameters ?? {})}`, '')
   }
+
   if (value.tools.length > 0) lines.push(`Run one with ${config.callToolName}({"name": "<tool name>", "arguments": {...}}).`)
+
   for (const miss of value.unknown) {
     lines.push(miss.closest.length > 0
       ? `No tool named "${miss.name}". Closest: ${miss.closest.join(', ')}.`
       : `No tool named "${miss.name}". Use a name from the index in ${config.detailsToolName}'s description.`)
   }
+
   if (value.truncated > 0) lines.push(`${value.truncated} more name(s) not shown: ask for at most ${config.maxDetails} at a time.`)
+
+  if (lines.length === 0) return `Nothing to show: ask ${config.detailsToolName} with exact names from the index.`
+
   return lines.join('\n')
 }
 
@@ -205,10 +192,7 @@ const DETAILS_OUTPUT = {
   required: ['tools', 'unknown', 'truncated'],
 }
 
-/**
- * One agent's view: the deferrable tools in full, as its latest assembly carried them. Kept per
- * agent, so each agent (sub-agents included) sees only the tools it actually has.
- */
+/** One agent's deferrable tools, as its latest assembly carried them. */
 export class AgentTools {
   constructor(config) {
     this.config = config
@@ -221,7 +205,6 @@ export class AgentTools {
     const deferrable = tools.filter(t => isDeferrable(t.name, this.config))
     this.catalog = new Map(deferrable.map(t => [t.name, t]))
     if (deferrable.length < Math.max(1, this.config.minTools)) {
-      // Too few to be worth the extra step: send everything as it is, and not this plugin's tools.
       return tools.filter(t => t.name !== detailsToolName && t.name !== callToolName)
     }
     return tools
@@ -270,11 +253,7 @@ export function detailsTool(state) {
   }
 }
 
-/**
- * The call tool for one agent. It runs the deferred tool through the registry as a nested call of
- * its own, so pre-execute policies, guards and approvals apply to the real name and arguments, and
- * hands back the nested result's content unchanged (images included).
- */
+/** The call tool for one agent: runs a deferred tool as a nested registry call. */
 export function callTool(state, tools) {
   const config = state.config
   const nested = new Map()
@@ -324,11 +303,24 @@ export function callTool(state, tools) {
 
 export function apply(ctx, config) {
   const resolved = resolveConfig(config)
+
   ctx.on('agent/created', ({ agent }) => {
     const scope = agent.ctx
+
+    // PTC mode: the program's tool API already lists every tool.
+    if (ctx.tools.get(RUN_CODE, agent)) return
+
+    for (const [setting, own] of [['detailsToolName', resolved.detailsToolName], ['callToolName', resolved.callToolName]]) {
+      if (ctx.tools.get(own, agent)) {
+        throw new Error(`dsh-tool-search: ${setting} is "${own}", a tool this agent already has; pick a free name`)
+      }
+    }
+
     const state = new AgentTools(resolved)
+
     scope.effect(() => scope.tools.register(detailsTool(state)))
     scope.effect(() => scope.tools.register(callTool(state, ctx.tools)))
+
     scope.on('system-prompt/assemble', async (_assembly, _context, next) => {
       const assembled = await next()
       assembled.tools = state.filter(assembled.tools)

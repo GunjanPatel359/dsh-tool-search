@@ -40,11 +40,12 @@ async function harness(config) {
   await ctx.plugin(ToolSearch, config)
   ctx.tools.register(tool('read', 'Read a file'))
 
-  async function agent(id) {
+  async function agent(id, presentation) {
     const key = { id }
     let scope
     await ctx.plugin(Object.assign(inner => { scope = createScope(inner, key) }, { inject: ['tools', 'systemPrompt'] }))
     key.ctx = scope.ctx
+    if (presentation) key.ctx.tools.presentAs(presentation)
     ctx.emit('agent/created', { agent: key })
     return key
   }
@@ -221,7 +222,77 @@ describe('dsh-tool-search', () => {
     expect(signed).toContain('call it directly')
   })
 
+  it('refuses a tool name this agent already has, instead of shadowing it', async () => {
+    const h = await harness({ detailsToolName: 'read', minTools: 1 })
+    await expect(h.agent('a')).rejects.toThrow(/detailsToolName is "read", a tool this agent already has/)
+    expect(h.ctx.tools.get('read').description).toBe('Read a file')
+  })
+
+  it('gives every server in the index a tool under it', async () => {
+    const { assemble, a } = await withTools({ indexChars: 300 })
+    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
+    expect(index).not.toContain('slack:')
+    for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
+  })
+
+  it('lists names only when not even a server header fits', async () => {
+    const { assemble, a } = await withTools({ indexChars: 10 })
+    const index = (await assemble(a)).find(t => t.name === 'tool_details').description
+    expect(index.split('\n').filter(line => /^[a-z0-9_]+:$/.test(line))).toEqual([])
+    for (const n of [...GITHUB, ...SLACK]) expect(index).toContain(n)
+  })
+
+  it('names the configured details tool in the name-only list', async () => {
+    const { assemble, a } = await withTools({ detailsToolName: 'find_tools', callToolName: 'use_tool', indexChars: 300 })
+    const index = (await assemble(a)).find(t => t.name === 'find_tools').description
+    expect(index).toContain('Also available (ask find_tools for what they do):')
+  })
+
+  it('answers a details call that asked for nothing', async () => {
+    const { call, text, a } = await withTools()
+    expect(text(await call(a, 'tool_details', { names: [] }))).toContain('Nothing to show')
+    expect(text(await call(a, 'tool_details', {}))).toContain('Nothing to show')
+  })
+
+  it('stands down for an agent in PTC mode, whose programs see every tool anyway', async () => {
+    const h = await harness()
+    const a = await h.agent('a', 'ptc')
+    h.mcp(a, 'github', GITHUB)
+    h.mcp(a, 'slack', SLACK)
+    expect(h.ctx.tools.get('tool_details', a)).toBeUndefined()
+    expect(h.ctx.tools.get('call_tool', a)).toBeUndefined()
+    expect(h.ctx.tools.get('mcp__github__create_issue', a)).toBeDefined()
+    // A native agent beside it still gets the index.
+    const b = await h.agent('b', 'native')
+    h.mcp(b, 'github', GITHUB)
+    h.mcp(b, 'slack', SLACK)
+    expect(await h.visible(b)).toEqual(['call_tool', 'read', 'tool_details'])
+  })
+
+  it('leaves a structured-output child its structured_output tool', async () => {
+    const h = await harness()
+    const a = await h.agent('a')
+    h.mcp(a, 'github', GITHUB)
+    h.mcp(a, 'slack', SLACK)
+    // Registered the way dsh-subagent registers it on a child that must answer in a schema.
+    const schema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] }
+    a.ctx.tools.register({
+      name: 'structured_output',
+      description: 'Report your final structured result.',
+      parameters: schema,
+      output: { schema: { type: 'object' }, render: () => [{ type: 'text', text: 'Structured output recorded.' }] },
+      execute: (_args, exec) => { exec.concludeTurn(); return Promise.resolve({ recorded: true }) },
+    })
+    const tools = await h.assemble(a)
+    expect(tools.find(t => t.name === 'structured_output').parameters).toEqual(schema)
+    expect(tools.find(t => t.name === 'tool_details').description).not.toContain('structured_output')
+    const result = await h.call(a, 'structured_output', { answer: '42' })
+    expect(result.isError).toBe(false)
+    expect(result.concludesTurn).toBe(true)
+  })
+
   it('refuses a configuration that cannot work', () => {
+    expect(() => ToolSearch.resolveConfig({ callToolName: 'run_code' })).toThrow(/reserves/)
     expect(() => ToolSearch.resolveConfig({ indexStyle: 'full' })).toThrow(/indexStyle/)
     expect(() => ToolSearch.resolveConfig({ detailsToolName: 'bad name' })).toThrow(/detailsToolName/)
     expect(() => ToolSearch.resolveConfig({ callToolName: 'tool_details' })).toThrow(/must differ/)
