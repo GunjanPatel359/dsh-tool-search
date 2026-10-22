@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { summary } from '../src/index.mjs'
-import { distance, rank, serverOf, stem, suggest, terms, words } from '../src/search.mjs'
+import { distance, serverOf, suggest, words } from '../src/search.mjs'
 
 const tools = [
   { name: 'mcp__github__create_issue' },
@@ -53,34 +53,5 @@ describe('summary', () => {
 
   it('cuts a long sentence', () => {
     expect(summary('a'.repeat(200), 20)).toBe(`${'a'.repeat(17)}...`)
-  })
-})
-
-describe('rank', () => {
-  const catalog = [
-    { name: 'mcp__fs__write_file', description: 'Create a new file or overwrite an existing file.' },
-    { name: 'mcp__fs__list_directory', description: 'Get a listing of all files and directories in a path.' },
-    { name: 'mcp__github__create_issue', description: 'Create a new issue in a repository.' },
-    { name: 'mcp__github__list_issues', description: 'List issues in a repository.' },
-    { name: 'mcp__playwright__browser_navigate', description: 'Navigate to a URL.' },
-  ]
-
-  it('stems and drops words that name no tool', () => {
-    expect(stem('issues')).toBe('issue')
-    expect(stem('directories')).toBe('directory')
-    expect(terms('Please use the tool to list 3 issues')).toEqual(['list', 'issue'])
-  })
-
-  it('ranks a word in the tool name above one in the description', () => {
-    expect(rank(catalog, 'list the issues', 5).map(t => t.name)[0]).toBe('mcp__github__list_issues')
-  })
-
-  it('does not pull in a whole server for its name alone', () => {
-    expect(rank(catalog, 'something on github', 5)).toEqual([])
-  })
-
-  it('needs the minimum score, and respects the limit', () => {
-    expect(rank(catalog, 'repository', 5, 3)).toEqual([])
-    expect(rank(catalog, 'create', 1)).toHaveLength(1)
   })
 })

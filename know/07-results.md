@@ -9,7 +9,7 @@ step of the task; 3 runs per cell; every column run with the same harness (dsh s
 
 ## Tokens per task
 
-| Model | No plugin | Plugin (`signature`, prefetch off) | Plugin + prefetch 5 |
+| Model | No plugin | Plugin (`signature`) | Plugin + prefetch 5 (removed) |
 |---|---|---|---|
 | DeepSeek deepseek-flash, 25 tools | 80,777 | **58,864 (-27%)** | 67,299 (-17%) |
 | DeepSeek deepseek-flash, 75 tools | 183,274 | **79,838 (-56%)** | 80,924 (-56%) |
@@ -32,7 +32,7 @@ or without the plugin, which is why per-task percentages are smaller than 88%.
 | Load a tool's definition on search | Every load changed the tool list and invalidated the provider cache for the whole conversation. Replaced. |
 | Fixed list, `summary` index | Per request -29% to -62%, but per task -40% to +17%: models looked up most tools first (one extra step each). |
 | `signature` index (now default) | Parameter names in the index; models call most tools directly. -15% to -56% per task. |
-| Prefetch (now off) | Attaching matched tools' details to each message removed few lookups (there were few left) and cost ~3k tokens a message; OpenAI also moved to built-in tools. Kept as an option. |
+| Prefetch (tried, removed) | Attaching matched tools' details to each message removed few lookups (there were few left) and cost ~3k tokens a message; OpenAI also moved to built-in tools. |
 
 ## What the runs show
 

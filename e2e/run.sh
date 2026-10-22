@@ -16,7 +16,6 @@
 #   RUNS       how many times to run each side (default 1)
 #   MIN_TOOLS  the plugin's minTools (default 10)
 #   INDEX_STYLE   the plugin's indexStyle: names | summary | signature (default)
-#   PREFETCH      the plugin's prefetch: tools attached to each request (0-10, default 0)
 #   SKIP_BASELINE set to run only the plugin side
 #   SKIP_PLUGIN   set to run only the baseline side
 #   TAG           a suffix for the output folder
@@ -49,7 +48,7 @@ if [ -z "$(printenv "$KEY" || true)" ]; then
   exit 2
 fi
 
-OUT="$HERE/out/$PROVIDER-$SERVERS${INDEX_STYLE:+-$INDEX_STYLE}${PREFETCH:+-prefetch$PREFETCH}${TAG:+-$TAG}"
+OUT="$HERE/out/$PROVIDER-$SERVERS${INDEX_STYLE:+-$INDEX_STYLE}${TAG:+-$TAG}"
 SANDBOX="$OUT/sandbox"
 rm -rf "$OUT" && mkdir -p "$SANDBOX"
 
@@ -129,7 +128,6 @@ cat > "$OUT/plugin.patch.yml" <<YAML
       config:
         minTools: ${MIN_TOOLS:-10}
         indexStyle: ${INDEX_STYLE:-signature}
-        prefetch: ${PREFETCH:-0}
 YAML
 
 run() {
