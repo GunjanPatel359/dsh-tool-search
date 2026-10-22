@@ -29,6 +29,7 @@ npm test
    RUNS=3 ./e2e/run.sh                            # three runs per side
    SERVERS=large RUNS=3 ./e2e/run.sh              # + memory, Playwright, Chrome DevTools
    PROVIDER=anthropic ./e2e/run.sh                # anthropic | openai | google; MODEL=... to pick
+   MODE=multi SERVERS=large RUNS=3 ./e2e/run.sh   # a 5-message conversation in one session
    ```
 
 Each run boots `dsh --profile headless --json` twice per round, without and with the plugin, and `e2e/summarize.mjs` prints steps, tokens (uncached, cached, output), tool calls and whether the task finished. Raw events stay in `e2e/out/` (not committed).

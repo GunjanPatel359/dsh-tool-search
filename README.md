@@ -27,7 +27,14 @@ Yes. One small task, three runs per cell, the same harness for every column (DSH
 | Claude claude-haiku-5-5, 25 MCP tools | 110,598 | 94,422 | **-15%** |
 | OpenAI gpt-5.4-mini, 25 MCP tools | 50,846 | 23,398 | **-54%** |
 
-Tokens per task, summed over every model step. Every run finished its task with and without the plugin. Per request, the plugin removes about 88% of what the MCP tools cost; the rest of a request (DSH's own prompt, built-in tools, the conversation) is unchanged. Details and caveats: [know/07-results.md](know/07-results.md).
+And over a 5-message conversation in one session (DeepSeek, two of the messages need no tools):
+
+| Servers | Without the plugin | With it | Change |
+|---|---|---|---|
+| 25 MCP tools | 159,736 | 106,398 | **-33%** |
+| 75 MCP tools | 317,040 | 147,120 | **-54%** |
+
+Tokens summed over every model step. Every run finished its task with and without the plugin. Per request, the plugin removes about 88% of what the MCP tools cost; the rest of a request (DSH's own prompt, built-in tools, the conversation) is unchanged. Details and caveats: [know/07-results.md](know/07-results.md).
 
 ## Why it never breaks the prompt cache
 
@@ -111,6 +118,7 @@ End to end, with a real model and real MCP servers (keys in `~/.dsh-e2e.env`; se
 ```sh
 RUNS=3 ./e2e/run.sh                         # DeepSeek
 PROVIDER=anthropic SERVERS=large ./e2e/run.sh
+MODE=multi RUNS=3 ./e2e/run.sh              # a 5-message conversation
 ```
 
 How it all works, file by file: [know/](know/README.md).

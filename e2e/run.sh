@@ -16,6 +16,8 @@
 #   RUNS       how many times to run each side (default 1)
 #   MIN_TOOLS  the plugin's minTools (default 10)
 #   INDEX_STYLE   the plugin's indexStyle: names | summary | signature (default)
+#   MODE       single (default: one task) | multi (a 5-message conversation in one session,
+#              each message resuming it with --session-id; only some messages need tools)
 #   SKIP_BASELINE set to run only the plugin side
 #   SKIP_PLUGIN   set to run only the baseline side
 #   TAG           a suffix for the output folder
@@ -48,7 +50,7 @@ if [ -z "$(printenv "$KEY" || true)" ]; then
   exit 2
 fi
 
-OUT="$HERE/out/$PROVIDER-$SERVERS${INDEX_STYLE:+-$INDEX_STYLE}${TAG:+-$TAG}"
+OUT="$HERE/out/$PROVIDER-$SERVERS${INDEX_STYLE:+-$INDEX_STYLE}${MODE:+-$MODE}${TAG:+-$TAG}"
 SANDBOX="$OUT/sandbox"
 rm -rf "$OUT" && mkdir -p "$SANDBOX"
 
@@ -130,16 +132,33 @@ cat > "$OUT/plugin.patch.yml" <<YAML
         indexStyle: ${INDEX_STYLE:-signature}
 YAML
 
+# The conversation MODE=multi plays: small talk between tool work, as a chat goes.
+TURNS=(
+  "Hi! In two sentences, what kinds of things can you help me with here?"
+  "Use the add tool to compute 17 + 25."
+  "Save that result to notes/today.md in the allowed directory."
+  "Thanks. In one sentence: why is 42 a famous number?"
+  "Now list the allowed directory and tell me what is in it."
+)
+
 run() {
   local label="$1"; shift
   local home="$OUT/home-$label"
   mkdir -p "$home"
   rm -rf "$SANDBOX" && mkdir -p "$SANDBOX"
-  echo "== $label ($PROVIDER $MODEL, $SERVERS)" >&2
-  # Run inside the sandbox, so the model's built-in file tools write there and not into the repo.
-  (cd "$SANDBOX" && DSH_HOME="$home" npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless \
-    --patch "$OUT/model.patch.yml" "$@" --json "$TASK" \
-    > "$OUT/$label.jsonl" 2> "$OUT/$label.stderr") || echo "   (exit $?; see $OUT/$label.stderr)" >&2
+  echo "== $label ($PROVIDER $MODEL, $SERVERS, ${MODE:-single})" >&2
+  : > "$OUT/$label.jsonl"
+  local session=""
+  local prompts=("$TASK")
+  [ "${MODE:-single}" = multi ] && prompts=("${TURNS[@]}")
+  for prompt in "${prompts[@]}"; do
+    # Run inside the sandbox, so the model's built-in file tools write there and not into the repo.
+    (cd "$SANDBOX" && DSH_HOME="$home" npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless \
+      --patch "$OUT/model.patch.yml" "$@" --json ${session:+--session-id "$session"} "$prompt" \
+      >> "$OUT/$label.jsonl" 2>> "$OUT/$label.stderr") || echo "   (exit $?; see $OUT/$label.stderr)" >&2
+    # Later messages resume the session the first one created.
+    [ -n "$session" ] || session="$(node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").split("\n").find(x=>x.includes("\"type\":\"session\""));if(l)process.stdout.write(JSON.parse(l).sessionId)' "$OUT/$label.jsonl")"
+  done
 }
 
 for i in $(seq 1 "$RUNS"); do

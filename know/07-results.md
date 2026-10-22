@@ -18,6 +18,22 @@ step of the task; 3 runs per cell; every column run with the same harness (dsh s
 
 36/36 runs finished the task. Gemini was not measured (free-tier key: 5 requests a minute).
 
+## A conversation (DeepSeek only)
+
+`MODE=multi`: five user messages in one session (each resumes it with `--session-id`); two need no tools at all.
+"Hi, what can you help with?", "use the add tool for 17 + 25", "save that to notes/today.md", "why is 42 famous?",
+"list the directory". 3 runs per side, deepseek-flash.
+
+| Servers | No plugin | Plugin | Change | Steps |
+|---|---|---|---|---|
+| 25 MCP tools | 159,736 | 106,398 | **-33%** | 12 -> 11 |
+| 75 MCP tools | 317,040 | 147,120 | **-54%** | 12 -> 12 |
+
+Every run kept one session for all five messages and ended without an error. Only one `tool_details` lookup in six
+plugin conversations: the `signature` index was enough the rest of the time. The saving grows with the conversation:
+every step of every message resends the tool definitions without the plugin, and the index costs the same few hundred
+tokens whatever the model does with it.
+
 ## Per request
 
 Going from 25 to 75 tools added 13,579 tokens to the first request without the plugin and 1,560 with it: the plugin
