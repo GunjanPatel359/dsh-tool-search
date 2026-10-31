@@ -1,7 +1,7 @@
 # Load the plugin from a checkout for one run:
 #   dsh --patch ./examples/local.patch.yml
 - insert:
-    - id: dsh-tool-search
+    - id: dsh-tool-index
       name: ../src/index.mjs
       config:
         minTools: 10

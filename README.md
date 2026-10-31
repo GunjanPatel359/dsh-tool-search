@@ -1,6 +1,10 @@
-# dsh-tool-search
+# dsh-tool-index
 
-Deferred tool loading for [DSH](https://github.com/deepseek-ai/deepseek-harness). Built on DeepSeek Harness; not an official DeepSeek project.
+**75 MCP tools connected, one small task: 183,274 tokens without this plugin, 79,838 with it — 56% less.**
+
+`dsh-tool-index` sends your MCP tool definitions as a compact index and loads full schemas only when the model asks for them. The tool list itself never changes mid-session, so your prompt cache keeps working.
+
+A plugin for [DSH](https://github.com/deepseek-ai/deepseek-harness). Built on DeepSeek Harness; not an official DeepSeek project.
 
 ## The problem
 
@@ -8,7 +12,7 @@ Every tool definition is sent again on every model request. Connect a few MCP se
 
 ## What it does
 
-`dsh-tool-search` sends those tools as a short index instead: each tool's **name, parameters and one-line summary**, grouped by server. When the model needs one, it reads the full details with `tool_details` and runs it with `call_tool`.
+`dsh-tool-index` sends those tools as a short index instead: each tool's **name, parameters and one-line summary**, grouped by server. When the model needs one, it reads the full details with `tool_details` and runs it with `call_tool`.
 
 ```
 without:  read, bash, mcp__github__create_issue {full schema}, mcp__github__list_issues {full schema}, ... ×180
@@ -40,28 +44,30 @@ And over a 5-message conversation in one session (DeepSeek, two of the messages 
 
 Tokens summed over every model step. Every run finished its task with and without the plugin. The more tools you connect, the more it saves.
 
+Reproduce them yourself with `e2e/run.sh`.
+
 ## Install
 
 As a bundle in a profile:
 
 ```sh
-dsh plugin --profile tui add dsh-tool-search
+dsh plugin --profile tui add dsh-tool-index
 dsh --profile tui
 ```
 
 Or from a checkout, for one run:
 
 ```sh
-git clone https://github.com/GunjanPatel359/dsh-tool-search
-cd dsh-tool-search
+git clone https://github.com/GunjanPatel359/dsh-tool-index
+cd dsh-tool-index
 dsh tui --patch ./examples/local.patch.yml
 ```
 
 ## Configuration
 
 ```yaml
-- id: dsh-tool-search
-  name: dsh-tool-search
+- id: dsh-tool-index
+  name: dsh-tool-index
   config:
     match: ['mcp__']          # name prefixes to defer
     exclude: []               # ...except these prefixes, e.g. ['mcp__mycore__'] for tools used every turn
@@ -94,6 +100,11 @@ Keep tools the agent uses on most turns out of the index with `exclude` or `alwa
 - **Sub-agents and structured-output children:** each agent gets its own index of its own tools. A child's `structured_output` tool stays a normal tool.
 
 Written for DSH 0.2.x. DSH is pre-1.0, so its plugin interfaces can change between releases.
+
+## How it works
+
+- [docs/how-it-works.md](docs/how-it-works.md) — the index, `tool_details`, `call_tool`, and why the tool list stays fixed.
+- [docs/name-matching.md](docs/name-matching.md) — how a wrong tool name is matched to the closest real one.
 
 ## License
 

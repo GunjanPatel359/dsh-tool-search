@@ -1,6 +1,6 @@
-# The layer `dsh plugin add dsh-tool-search` applies. Override the row's config in your
+# The layer `dsh plugin add dsh-tool-index` applies. Override the row's config in your
 # profile's cordis.patch.yml (restate every key you set; a patch replaces the whole config).
 - insert:
-    - id: dsh-tool-search
-      name: dsh-tool-search
+    - id: dsh-tool-index
+      name: dsh-tool-index
       config: {}

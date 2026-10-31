@@ -1,11 +1,11 @@
 /**
- * dsh-tool-search: deferred tool loading for DSH (built on DeepSeek Harness).
+ * dsh-tool-index: deferred tool loading for DSH (built on DeepSeek Harness).
  * How it works: docs/how-it-works.md.
  */
 
 import { serverOf, suggest } from './search.mjs'
 
-export const name = 'dsh-tool-search'
+export const name = 'dsh-tool-index'
 export const inject = ['tools', 'systemPrompt']
 
 export const DEFAULTS = Object.freeze({
@@ -30,26 +30,26 @@ export function resolveConfig(config = {}) {
   const resolved = { ...DEFAULTS, ...(config ?? {}) }
   for (const key of ['detailsToolName', 'callToolName']) {
     if (typeof resolved[key] !== 'string' || !TOOL_NAME.test(resolved[key])) {
-      throw new Error(`dsh-tool-search: ${key} must be 1-64 letters, digits, "_" or "-", got ${JSON.stringify(resolved[key])}`)
+      throw new Error(`dsh-tool-index: ${key} must be 1-64 letters, digits, "_" or "-", got ${JSON.stringify(resolved[key])}`)
     }
-    if (resolved[key] === RUN_CODE) throw new Error(`dsh-tool-search: ${key} cannot be "${RUN_CODE}", which DSH reserves`)
+    if (resolved[key] === RUN_CODE) throw new Error(`dsh-tool-index: ${key} cannot be "${RUN_CODE}", which DSH reserves`)
   }
   if (resolved.detailsToolName === resolved.callToolName) {
-    throw new Error('dsh-tool-search: detailsToolName and callToolName must differ')
+    throw new Error('dsh-tool-index: detailsToolName and callToolName must differ')
   }
   for (const key of ['match', 'exclude', 'alwaysLoad']) {
     if (!Array.isArray(resolved[key]) || resolved[key].some(v => typeof v !== 'string')) {
-      throw new Error(`dsh-tool-search: ${key} must be a list of strings`)
+      throw new Error(`dsh-tool-index: ${key} must be a list of strings`)
     }
   }
   for (const key of ['minTools', 'maxDetails', 'summaryChars', 'indexChars']) {
     if (!Number.isInteger(resolved[key]) || resolved[key] < 0) {
-      throw new Error(`dsh-tool-search: ${key} must be a whole number of 0 or more`)
+      throw new Error(`dsh-tool-index: ${key} must be a whole number of 0 or more`)
     }
   }
-  if (resolved.maxDetails < 1) throw new Error('dsh-tool-search: maxDetails must be at least 1')
+  if (resolved.maxDetails < 1) throw new Error('dsh-tool-index: maxDetails must be at least 1')
   if (!INDEX_STYLES.includes(resolved.indexStyle)) {
-    throw new Error(`dsh-tool-search: indexStyle must be one of ${INDEX_STYLES.join(', ')}`)
+    throw new Error(`dsh-tool-index: indexStyle must be one of ${INDEX_STYLES.join(', ')}`)
   }
   return resolved
 }
@@ -312,7 +312,7 @@ export function apply(ctx, config) {
 
     for (const [setting, own] of [['detailsToolName', resolved.detailsToolName], ['callToolName', resolved.callToolName]]) {
       if (ctx.tools.get(own, agent)) {
-        throw new Error(`dsh-tool-search: ${setting} is "${own}", a tool this agent already has; pick a free name`)
+        throw new Error(`dsh-tool-index: ${setting} is "${own}", a tool this agent already has; pick a free name`)
       }
     }
 

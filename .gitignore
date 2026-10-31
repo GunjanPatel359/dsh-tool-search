@@ -8,3 +8,6 @@ know/
 # editor and agent settings
 .idea/
 .qoder/
+
+# graft index
+graft/

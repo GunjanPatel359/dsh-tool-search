@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end check: the same task with and without dsh-tool-search, on a real model and real MCP
+# End-to-end check: the same task with and without dsh-tool-index, on a real model and real MCP
 # servers, repeated RUNS times. Writes every run's events to e2e/out/<provider>-<servers>/ and
 # prints the comparison (means, with min-max).
 #
@@ -125,7 +125,7 @@ fi
 
 cat > "$OUT/plugin.patch.yml" <<YAML
 - insert:
-    - id: dsh-tool-search
+    - id: dsh-tool-index
       name: '$ROOT/src/index.mjs'
       config:
         minTools: ${MIN_TOOLS:-10}

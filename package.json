@@ -1,7 +1,7 @@
 {
-  "name": "dsh-tool-search",
+  "name": "dsh-tool-index",
   "version": "0.1.0",
-  "description": "Deferred tool loading for DSH: send MCP tools as a name index and load details on demand, without breaking the prompt cache. Built on DeepSeek Harness.",
+  "description": "Cut MCP token cost in DSH: send tool definitions as a compact index and load full schemas on demand, with the tool list stable so the prompt cache keeps working. Built on DeepSeek Harness.",
   "type": "module",
   "main": "src/index.mjs",
   "exports": {
@@ -21,8 +21,14 @@
   "keywords": [
     "dsh",
     "dsh-plugin",
+    "deepseek-harness",
     "mcp",
+    "tool-index",
     "tool-search",
+    "deferred-tools",
+    "progressive-disclosure",
+    "prompt-cache",
+    "token-reduction",
     "agent"
   ],
   "author": "Gunjan Patel",
@@ -44,10 +50,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GunjanPatel359/dsh-tool-search.git"
+    "url": "git+https://github.com/GunjanPatel359/dsh-tool-index.git"
   },
-  "homepage": "https://github.com/GunjanPatel359/dsh-tool-search#readme",
+  "homepage": "https://github.com/GunjanPatel359/dsh-tool-index#readme",
   "bugs": {
-    "url": "https://github.com/GunjanPatel359/dsh-tool-search/issues"
+    "url": "https://github.com/GunjanPatel359/dsh-tool-index/issues"
   }
 }
