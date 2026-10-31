@@ -69,7 +69,7 @@ dsh tui --patch ./examples/local.patch.yml
 - id: dsh-tool-index
   name: dsh-tool-index
   config:
-    match: ['mcp__']          # name prefixes to defer
+    match: ['mcp__']          # MCP name prefixes to defer
     exclude: []               # ...except these prefixes, e.g. ['mcp__mycore__'] for tools used every turn
     alwaysLoad: []            # exact names always sent in full
     minTools: 10              # defer only when at least this many match
@@ -86,6 +86,8 @@ A patch replaces a row's whole `config`, so restate every key you set.
 With fewer than `minTools` matching tools nothing changes: a handful of definitions costs less than an extra step.
 
 Keep tools the agent uses on most turns out of the index with `exclude` or `alwaysLoad`.
+
+This plugin is for MCP tools. `match` takes name prefixes, but deferring your harness's own core tools (`read`, `bash` and the like) will make the agent worse, not cheaper: it needs them on almost every turn, and there is no guard against it.
 
 ## Trade-offs
 
